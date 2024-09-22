@@ -4258,6 +4258,82 @@ def split_str_to_n_bytes(split_str: str) -> int:
 
     return n
 
+def convert_model(
+    model_path: str,
+    output_path: str,
+    output_type: str = "f16",
+    bigendian: bool = False,
+    use_temp_file: bool = False,
+    model_name: str | None = None,
+    split_max_tensors: int = 0,
+    split_max_size: str = "0",
+    no_tensor_first_split: bool = False,
+    metadata_path: str | None = None,
+) -> None:
+    """
+    Convert a Hugging Face model to GGUF format.
+
+    Args:
+        model_path (str): Path to the input model directory.
+        output_path (str): Path for the output GGUF file.
+        output_type (str): Output type (f32, f16, q8_0, q4_0, q4_1).
+        bigendian (bool): Whether to use big endian format.
+        use_temp_file (bool): Whether to use a temporary file during conversion.
+        model_name (str | None): Name of the model.
+        split_max_tensors (int): Maximum number of tensors per split.
+        split_max_size (str): Maximum size per split (e.g., "2G").
+        no_tensor_first_split (bool): Whether to avoid adding tensors to the first split.
+        metadata_path (str | None): Path to metadata override file.
+
+    Raises:
+        ValueError: If the model path is invalid or the model is not supported.
+    """
+    dir_model = Path(model_path)
+    if not dir_model.is_dir():
+        raise ValueError(f'Error: {model_path} is not a directory')
+
+    ftype_map = {
+        "f32": gguf.LlamaFileType.ALL_F32,
+        "f16": gguf.LlamaFileType.MOSTLY_F16,
+        "bf16": gguf.LlamaFileType.MOSTLY_BF16,
+        "q8_0": gguf.LlamaFileType.MOSTLY_Q8_0,
+        "tq1_0": gguf.LlamaFileType.MOSTLY_TQ1_0,
+        "tq2_0": gguf.LlamaFileType.MOSTLY_TQ2_0,
+        "auto": gguf.LlamaFileType.GUESSED,
+    }
+
+    is_split = split_max_tensors > 0 or split_max_size != "0"
+    if use_temp_file and is_split:
+        raise ValueError("Error: Cannot use temp file when splitting")
+
+    logger.info(f"Loading model: {dir_model.name}")
+
+    hparams = Model.load_hparams(dir_model)
+
+    with torch.inference_mode():
+        output_type_enum = ftype_map[output_type]
+        model_architecture = hparams["architectures"][0]
+
+        try:
+            model_class = Model.from_model_architecture(model_architecture)
+        except NotImplementedError:
+            raise ValueError(f"Model {model_architecture} is not supported")
+
+        model_instance = model_class(
+            dir_model=dir_model,
+            ftype=output_type_enum,
+            fname_out=output_path,
+            is_big_endian=bigendian,
+            use_temp_file=use_temp_file,
+            model_name=model_name,
+            split_max_tensors=split_max_tensors,
+            split_max_size=split_str_to_n_bytes(split_max_size),
+            no_tensor_first_split=no_tensor_first_split,
+            metadata_path=metadata_path,
+        )
+        model_instance.convert()
+
+    logger.info("Done")
 
 def main() -> None:
     args = parse_args()
